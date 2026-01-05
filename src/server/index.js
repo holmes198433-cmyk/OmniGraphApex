@@ -1,36 +1,62 @@
-/**
- * OMNIGRAPH APEX™ // CORE ENGINE v1.2
- * FINAL CONSOLIDATED SHIPPING VERSION
- */
-require('dotenv').config();
-const express = require('express');
-const crypto = require('crypto');
-const cors = require('cors');
+//_----------------------
+ // OMNIGRAPH APEX™ // CORE ENGINE v1.5
+ // src/server/index.js
+// v1.5 - AUDIT COMPLIANT CORE
+// --------------------------------------------------------
 
-const app = express();
-app.use(express.json());
-app.use(cors());
+import { shopifyApp } from "@shopify/shopify-app-remix/server";
+import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
+import { restResources } from "@shopify/shopify-api/rest/admin/2024-01";
+import prisma from "./db.server";
 
-const PORT = process.env.PORT || 8080;
-const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET || 'dev_secret_key';
-
-app.post('/api/pulse', (req, res) => {
-    const { productData } = req.body;
-    res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
-    const proofId = crypto.createHmac('sha256', SHOPIFY_API_SECRET)
-                          .update(JSON.stringify(productData) + Date.now())
-                          .digest('hex');
-    res.json({ 
-        success: true, 
-        payload: {
-            "@context": "https://schema.org/",
-            "@type": "Product",
-            "name": productData.title,
-            "sku": productData.sku,
-            "omnigraph_fidelity": "APEX_VERIFIED",
-            "proof_signature": proofId
-        } 
-    });
+// 1. Initialize the App "Brain" with Audit-Compliant Settings
+const shopify = shopifyApp({
+  apiKey: process.env.SHOPIFY_API_KEY,
+  apiSecretKey: process.env.SHOPIFY_API_SECRET,
+  scopes: process.env.SCOPES?.split(",") || ["write_products", "read_themes"],
+  appUrl: process.env.HOST,
+  authPathPrefix: "/auth",
+  sessionStorage: new PrismaSessionStorage(prisma),
+  restResources,
+  
+  // 2. Mandatory Webhook Registration (CRITICAL FOR AUDIT)
+  // This ensures we listen for uninstalls and GDPR requests.
+  webhooks: {
+    APP_UNINSTALLED: {
+      deliveryMethod: "http",
+      callbackUrl: "/webhooks",
+    },
+  },
+  
+  // 3. Security Hooks
+  hooks: {
+    afterAuth: async ({ session }) => {
+      // This runs immediately after the merchant installs the app.
+      // We log it to ensure the handshake worked.
+      console.log("--> OAUTH SUCCESS: Merchant installed app:", session.shop);
+      
+      // Register webhooks immediately after auth
+      await shopify.registerWebhooks({ session });
+    },
+  },
+  future: {
+    v3_webhookAdminContext: true,
+    v3_authenticatePublic: true,
+  },
 });
 
-app.listen(PORT, () => console.log(`--- APEX ENGINE ACTIVE ON PORT ${PORT} ---`));
+// Export the auth function for use in your routes (routes/*.jsx)
+export const authenticate = shopify.authenticate;
+
+// Export the unauthenticated login for the landing page
+export const unauthenticated = shopify.unauthenticated;
+
+// Export the login handler
+export const login = shopify.login;
+
+// Export the webhook handler
+export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
+export const registerWebhooks = shopify.registerWebhooks;
+
+// Export the App boundary
+export default shopify;
